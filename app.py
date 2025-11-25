@@ -173,7 +173,11 @@ def extract_features_from_images(images_paths):
         Extracted features as string (bullet points)
     """
     
-    system_prompt = """これらの服の特徴を箇条書きで10個書いてください。出力は箇条書きで、markdown形式の記述を避けてください。"""
+    system_prompt = """これらの服の特徴を箇条書きで10個書いてください。出力は箇条書きで、markdown形式の記述を避けてください。
+    出力形式:
+・〜〜〜
+・〜〜〜
+・〜〜〜"""
     
     # Build image content for API
     image_content = []
@@ -609,6 +613,22 @@ def second():
                 return render_template('second.html', account_name=account_name, 
                                      error='評価用画像の処理に失敗しました'), 500
             
+            # ダミー項目を追加（注意喚起用）
+            dummy_item = {
+                'id': 'dummy_check',
+                'filename': 'virus.png',
+                'impression_id': 'dummy_check',
+                'prediction_propose': 'ここでは１と入力してください。',
+                'prediction_compare': 'ここでは５を入力してください',
+                'show_propose_left': True,
+                'has_error': False,
+                'is_dummy': True
+            }
+            impressions_list.append(dummy_item)
+            
+            # リストをシャッフルしてダミー項目の位置をランダムにする
+            random.shuffle(impressions_list)
+            
             # メモリ上のキャッシュに保存（session['sid']をキーとする）
             cache_key = session.get('cache_key')
             if not cache_key:
@@ -675,7 +695,8 @@ def output():
             'left_prediction': img_data['prediction_propose'] if show_propose_left else img_data['prediction_compare'],
             'right_prediction': img_data['prediction_compare'] if show_propose_left else img_data['prediction_propose'],
             'left_method': 'propose' if show_propose_left else 'compare',
-            'right_method': 'compare' if show_propose_left else 'propose'
+            'right_method': 'compare' if show_propose_left else 'propose',
+            'is_dummy': img_data.get('is_dummy', False)  # ダミーフラグを追加
         })
     
     logger.info(f"Loaded {len(expanded_images)} impressions from memory cache")
@@ -683,6 +704,10 @@ def output():
     if request.method == 'POST':
         scores_left = {}
         scores_right = {}
+        
+        # ダミー画像のバリデーション用変数
+        dummy_validation_failed = False
+        dummy_error_message = ''
         
         for img in expanded_images:
             img_id = img['id']
@@ -695,13 +720,39 @@ def output():
             try:
                 scores_left[img_id] = int(score_left)
                 scores_right[img_id] = int(score_right)
+                
+                # ダミー画像のチェック
+                if img.get('is_dummy', False):
+                    if scores_left[img_id] != 1:
+                        dummy_validation_failed = True
+                        dummy_error_message = f'注意喚起項目の左側（予測A）で指示された値（1）が入力されていません。入力された値: {scores_left[img_id]}'
+                        logger.warning(f"Dummy validation failed for {account_name}: Left score = {scores_left[img_id]} (expected 1)")
+                    if scores_right[img_id] != 5:
+                        dummy_validation_failed = True
+                        dummy_error_message = f'注意喚起項目の右側（予測B）で指示された値（5）が入力されていません。入力された値: {scores_right[img_id]}'
+                        logger.warning(f"Dummy validation failed for {account_name}: Right score = {scores_right[img_id]} (expected 5)")
+                    
+                    if dummy_validation_failed:
+                        break
+                        
             except ValueError:
                 return render_template('output.html', evaluation_images=expanded_images, 
                                      error='無効な評価値です'), 400
         
+        # ダミーバリデーション失敗時の処理
+        if dummy_validation_failed:
+            logger.error(f"Validation check failed for account: {account_name}")
+            return render_template('output.html', evaluation_images=expanded_images, 
+                                 error=f'【評価の信頼性チェック失敗】{dummy_error_message} 指示に従って正確に入力してください。'), 400
+        
         results = []
         for img in expanded_images:
             img_id = img['id']
+            
+            # ダミー画像は結果に含めない
+            if img.get('is_dummy', False):
+                logger.info(f"Dummy validation passed for {account_name}")
+                continue
             
             # 提案手法と比較手法のスコアを正しく振り分ける
             if img['left_method'] == 'propose':

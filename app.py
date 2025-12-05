@@ -706,8 +706,7 @@ def output():
         scores_right = {}
         
         # ダミー画像のバリデーション用変数
-        dummy_validation_failed = False
-        dummy_error_message = ''
+        validation_passed = True
         
         for img in expanded_images:
             img_id = img['id']
@@ -720,6 +719,16 @@ def output():
             try:
                 scores_left[img_id] = int(score_left)
                 scores_right[img_id] = int(score_right)
+                
+                # ダミー画像のチェック（バリデーションフラグのみ更新し、エラーにはしない）
+                if img.get('is_dummy', False):
+                    if scores_left[img_id] != 1:
+                        validation_passed = False
+                        logger.warning(f"Dummy validation failed for {account_name}: Left score = {scores_left[img_id]} (expected 1)")
+                    if scores_right[img_id] != 5:
+                        validation_passed = False
+                        logger.warning(f"Dummy validation failed for {account_name}: Right score = {scores_right[img_id]} (expected 5)")
+                    
             except ValueError:
                 return render_template('output.html', evaluation_images=expanded_images, 
                                      error='無効な評価値です'), 400
@@ -749,6 +758,7 @@ def output():
         n8n_data = {
             'account_name': account_name,
             'timestamp': datetime.now().isoformat(),
+            'validation_passed': validation_passed,
             'results': results
         }
         send_to_n8n(N8N_WEBHOOK_RESULT, n8n_data)
